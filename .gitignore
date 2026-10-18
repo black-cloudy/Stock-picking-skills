@@ -1,0 +1,27 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---- 运行时数据 / 缓存（体积大，可重跑生成）----
+.data/
+logs/
+*.log
+*.db
+*.sqlite3
+
+# ---- 研究中间产物（可重新生成，勿入库）----
+research/_archive/
+research/*.parquet
+research/*.pkl
+research/samples*.csv
+research/trend_*.csv
+research/_*.json
+
+# ---- 编辑器 ----
+.idea/
+.vscode/
+.DS_Store

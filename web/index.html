@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>StockAgent · A股实时行情</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<!-- ───────────────────────────── 顶栏 ───────────────────────────── -->
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">SA</span>
+    <span class="brand-text">StockAgent</span>
+  </div>
+
+  <div class="indices" id="indices">
+    <div class="idx-placeholder">加载大盘指数…</div>
+  </div>
+
+  <div class="topbar-right">
+    <span class="market-status" id="marketStatus">--</span>
+    <span class="clock" id="clock">--:--:--</span>
+    <button class="icon-btn" id="refreshBtn" title="立即刷新">⟳</button>
+  </div>
+</header>
+
+<!-- ───────────────────────────── 主体 ───────────────────────────── -->
+<main class="layout">
+
+  <!-- 左侧栏 -->
+  <aside class="sidebar">
+    <div class="search-wrap">
+      <input id="searchInput" type="text" placeholder="代码 / 名称 / 拼音" autocomplete="off" />
+      <div class="search-results" id="searchResults" hidden></div>
+    </div>
+
+    <div class="side-tabs">
+      <button class="side-tab active" data-tab="watch">自选</button>
+      <button class="side-tab" data-tab="rank">排行</button>
+    </div>
+
+    <div class="side-panel" id="panelWatch">
+      <div class="watch-list" id="watchList"></div>
+      <button class="add-current" id="addWatchBtn">＋ 把当前股票加入自选</button>
+    </div>
+
+    <div class="side-panel hidden" id="panelRank">
+      <div class="rank-controls">
+        <select id="rankMarket">
+          <option value="all">全部A股</option>
+          <option value="sh">沪市</option>
+          <option value="sz">深市</option>
+          <option value="cyb">创业板</option>
+          <option value="kcb">科创板</option>
+          <option value="bj">北交所</option>
+          <option value="etf">ETF</option>
+          <option value="index">指数</option>
+        </select>
+        <select id="rankSort">
+          <option value="pct">涨跌幅</option>
+          <option value="amount">成交额</option>
+          <option value="turnover">换手率</option>
+          <option value="volume_ratio">量比</option>
+          <option value="main_inflow">主力净流入</option>
+          <option value="total_mv">总市值</option>
+        </select>
+      </div>
+      <div class="watch-list" id="rankList"></div>
+    </div>
+  </aside>
+
+  <!-- 右侧主区 -->
+  <section class="content">
+
+    <!-- 标题行情条 -->
+    <div class="stock-head" id="stockHead">
+      <div class="sh-left">
+        <div class="sh-name">
+          <span id="stkName">--</span>
+          <span class="sh-code" id="stkCode"></span>
+          <span class="sh-tag" id="stkIndustry"></span>
+        </div>
+        <div class="sh-meta" id="stkMeta"></div>
+      </div>
+      <div class="sh-price">
+        <span class="big-price" id="stkPrice">--</span>
+        <span class="big-chg" id="stkChange">--</span>
+        <span class="big-pct" id="stkPct">--</span>
+      </div>
+    </div>
+
+    <!-- 周期切换 -->
+    <div class="chart-tabs" id="chartTabs">
+      <button data-period="minute" class="active">分时</button>
+      <button data-period="minute5">五日</button>
+      <span class="sep"></span>
+      <button data-period="1m">1分</button>
+      <button data-period="5m">5分</button>
+      <button data-period="15m">15分</button>
+      <button data-period="30m">30分</button>
+      <button data-period="60m">60分</button>
+      <span class="sep"></span>
+      <button data-period="daily">日K</button>
+      <button data-period="weekly">周K</button>
+      <button data-period="monthly">月K</button>
+      <span class="spacer"></span>
+      <label class="adjust-label">复权
+        <select id="adjustSelect">
+          <option value="qfq">前复权</option>
+          <option value="hfq">后复权</option>
+          <option value="none">不复权</option>
+        </select>
+      </label>
+      <span class="auto-label"><input type="checkbox" id="autoRefresh" checked /> 自动刷新</span>
+    </div>
+
+    <!-- 图表 -->
+    <div class="chart-box">
+      <div id="chart" class="chart"></div>
+      <div class="chart-loading" id="chartLoading" hidden>加载中…</div>
+    </div>
+
+    <!-- 盘口 / 明细 -->
+    <div class="bottom-panels">
+      <div class="panel">
+        <div class="panel-title">五档盘口</div>
+        <div class="orderbook" id="orderbook"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">逐笔成交</div>
+        <div class="ticks" id="ticks"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">关键指标</div>
+        <div class="metrics" id="metrics"></div>
+      </div>
+    </div>
+
+  </section>
+</main>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="/static/vendor/echarts.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
