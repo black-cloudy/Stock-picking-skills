@@ -156,6 +156,38 @@ body {
 }
 .f-tabs button:hover { color: var(--txt-2); }
 .f-tabs button.active { background: linear-gradient(135deg, var(--acc), #ff5b2e); color: #1a0f05; font-weight: 700; }
+.f-tabs.inline { margin-left: 0; }
+.f-group { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+[hidden] { display: none !important; }
+
+/* ─────────────── 模式选择 ─────────────── */
+.modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+.mode {
+  position: relative; text-align: left; cursor: pointer; transition: .17s;
+  background: var(--card); border: 1px solid var(--line); border-left: 3px solid transparent;
+  border-radius: 11px; padding: 12px 15px 13px; color: var(--txt);
+  font: inherit; font-family: inherit;
+}
+.mode b { display: block; font-size: 14.5px; font-weight: 800; letter-spacing: .2px; }
+.mode em {
+  font-style: normal; display: block; font-size: 11.5px; color: var(--txt-3);
+  margin-top: 3px; padding-right: 56px;
+}
+.mode:hover { background: var(--card-2); border-color: #33405a; transform: translateY(-1px); }
+.mode.active {
+  border-color: rgba(255,138,61,.5); border-left-color: var(--acc);
+  background: linear-gradient(135deg, rgba(255,138,61,.15), rgba(255,138,61,.02));
+  box-shadow: 0 0 0 1px rgba(255,138,61,.18);
+}
+.mode.active b { color: var(--acc-2); }
+.mode.active em { color: var(--txt-2); }
+.mtag {
+  position: absolute; top: 11px; right: 12px; font-size: 10px; font-weight: 700;
+  padding: 2px 7px; border-radius: 6px; white-space: nowrap;
+  background: rgba(74,158,255,.14); color: var(--blue); border: 1px solid rgba(74,158,255,.3);
+}
+.mtag.warn { background: rgba(255,179,71,.13); color: var(--acc-2); border-color: rgba(255,179,71,.32); }
+.mtag.ok { background: rgba(46,230,168,.13); color: var(--ok); border-color: rgba(46,230,168,.3); }
 
 /* ─────────────── 两栏 ─────────────── */
 .columns { display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 0; }
@@ -282,4 +314,5 @@ body {
   .columns { grid-template-columns: 1fr; }
   .col-list { border-right: none; border-bottom: 1px solid var(--line-soft); }
   .cards { max-height: 420px; }
+  .modes { grid-template-columns: 1fr; }
 }

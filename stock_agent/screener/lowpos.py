@@ -337,6 +337,76 @@ def quick_lowpos_ok(bars: Sequence[Dict[str, Any]], cfg: LowPosConfig) -> bool:
     return True
 
 
+def lowpos_checklist(
+    f: Dict[str, Any],
+    cfg: Optional[LowPosConfig] = None,
+    kind: str = "early",
+) -> List[Dict[str, Any]]:
+    """把低位票的硬条件拆成「可展示的勾选清单」（供 Web 详情页用）。
+
+    ``kind``：``early``（拐头档）/ ``breakout``（突破档）。
+    这里只读 :func:`extract_lowpos` 的特征字典，不改动判定结果本身。
+    """
+    cfg = cfg or LowPosConfig()
+    pct = lambda v: f"{v * 100:.1f}%"  # noqa: E731
+
+    if kind == "breakout":
+        rows = [
+            ("250 日跌幅足够深", f["dd250"] >= cfg.min_drawdown,
+             f"250 日回撤 {pct(f['dd250'])}（≥{pct(cfg.min_drawdown)}）"),
+            ("仍在低位区", f["pos250"] <= cfg.max_position_breakout,
+             f"250 日区间位置 {pct(f['pos250'])}（≤{pct(cfg.max_position_breakout)}）"),
+            ("距 250 日高仍有空间", f["vs_hh250"] <= cfg.max_close_vs_hh250_breakout,
+             f"收盘 / 250 日高 {pct(f['vs_hh250'])}（≤{pct(cfg.max_close_vs_hh250_breakout)}）"),
+            ("突破前均线粘合", f["spread_min20"] <= cfg.min_spread20,
+             f"近 20 日最小离散度 {pct(f['spread_min20'])}（≤{pct(cfg.min_spread20)}）"),
+            ("当前离散度未过度发散", f["spread_now"] <= cfg.max_spread_now_breakout,
+             f"当前 {pct(f['spread_now'])}（≤{pct(cfg.max_spread_now_breakout)}）"),
+            ("放量大阳 / 涨停启动",
+             f["chg1"] >= cfg.breakout_min_gain * 100.0 or f["chg3"] >= cfg.breakout_min_gain3 * 100.0,
+             f"今日 {f['chg1']:+.2f}% / 近 3 日 {f['chg3']:+.2f}%"),
+            ("突破放量", f["vol_today"] >= cfg.breakout_min_vol or f["chg1"] >= 9.5,
+             f"今日量 / 前 5 日均量 {f['vol_today']:.2f}（≥{cfg.breakout_min_vol:.2f}，一字板豁免）"),
+            ("均线已拐头", f["ma5"] > f["ma10"] and f["ma10"] >= f["ma20"] * cfg.breakout_min_ma10_ma20,
+             f"MA5 {f['ma5']:.2f} / MA10 {f['ma10']:.2f} / MA20 {f['ma20']:.2f}"),
+            ("收盘站上均线", f["price"] >= f["ma5"] * 0.99,
+             f"收盘 {f['price']:.2f} vs MA5 {f['ma5']:.2f}"),
+            ("MACD 动能不拖后腿", f["macd_hist"] >= cfg.breakout_min_hist,
+             f"MACD 柱 {f['macd_hist']:.3f}（≥{cfg.breakout_min_hist}）"),
+            ("不追疯", f["bias20"] <= cfg.breakout_max_bias20 * 100.0,
+             f"BIAS20 {f['bias20']:+.2f}%（≤{cfg.breakout_max_bias20 * 100:.0f}%）"),
+        ]
+    else:
+        rows = [
+            ("250 日跌幅足够深", f["dd250"] >= cfg.min_drawdown,
+             f"250 日回撤 {pct(f['dd250'])}（≥{pct(cfg.min_drawdown)}）"),
+            ("近 120 日还在跌", f["dd120"] >= cfg.min_drawdown_120,
+             f"120 日回撤 {pct(f['dd120'])}（≥{pct(cfg.min_drawdown_120)}）"),
+            ("处于低位区", f["pos250"] <= cfg.max_position,
+             f"250 日区间位置 {pct(f['pos250'])}（≤{pct(cfg.max_position)}）"),
+            ("距 250 日高足够远", f["vs_hh250"] <= cfg.max_close_vs_hh250,
+             f"收盘 / 250 日高 {pct(f['vs_hh250'])}（≤{pct(cfg.max_close_vs_hh250)}）"),
+            ("低点新鲜", f["low_age60"] <= cfg.max_low_age,
+             f"60 日最低点距今 {int(f['low_age60'])} 天（≤{cfg.max_low_age}）"),
+            ("四线粘合", f["spread_min10"] <= cfg.max_spread,
+             f"近 10 日最小离散度 {pct(f['spread_min10'])}（≤{pct(cfg.max_spread)}）"),
+            ("当前仍未发散", f["spread_now"] <= cfg.max_spread_now,
+             f"当前离散度 {pct(f['spread_now'])}（≤{pct(cfg.max_spread_now)}）"),
+            ("MA5 上穿 MA10", f["days_since_cross"] <= cfg.cross_days,
+             f"金叉后第 {int(f['days_since_cross'])} 天（≤{cfg.cross_days}）"),
+            ("金叉时足够粘合", f["cross_spread"] <= cfg.max_cross_spread,
+             f"金叉当日离散度 {pct(f['cross_spread'])}（≤{pct(cfg.max_cross_spread)}）"),
+            ("收盘站上均线", f["price"] >= f["ma5"] * 0.99,
+             f"收盘 {f['price']:.2f} vs MA5 {f['ma5']:.2f}"),
+            ("MACD 柱翻红", (not cfg.require_hist_pos) or f["macd_hist"] >= 0,
+             f"MACD 柱 {f['macd_hist']:.3f}"),
+            ("BIAS20 不追高",
+             cfg.min_bias20 * 100 <= f["bias20"] <= cfg.max_bias20 * 100,
+             f"BIAS20 {f['bias20']:+.2f}%（{cfg.min_bias20 * 100:+.0f}% ~ {cfg.max_bias20 * 100:+.0f}%）"),
+        ]
+    return [{"label": a, "ok": bool(b), "detail": c} for a, b, c in rows]
+
+
 def detect_low_position(
     bars: Sequence[Dict[str, Any]],
     code: str,

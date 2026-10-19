@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>美人肩 · A股涨停蓄势二次突破量化选股系统</title>
+<title>形态量化选股 · 经典/广义美人肩 · 低位票</title>
 <link rel="stylesheet" href="/static/mrj.css" />
 </head>
 <body>
@@ -11,10 +11,10 @@
 <!-- ───────────────── 顶栏 ───────────────── -->
 <header class="topbar">
   <div class="brand">
-    <span class="logo">人</span>
+    <span class="logo">形</span>
     <div class="brand-txt">
-      <h1>A股涨停蓄势二次突破量化选股系统</h1>
-      <p>美人肩形态 · 首板涨停后横盘蓄势 · 捕捉二次涨停</p>
+      <h1>A股形态量化选股系统</h1>
+      <p>经典美人肩 · 广义美人肩 · 低位票 —— 三模式量化扫描</p>
     </div>
   </div>
   <nav class="topnav">
@@ -28,11 +28,11 @@
 <!-- ───────────────── 统计条 ───────────────── -->
 <div class="statbar">
   <span class="dot"></span>
-  <span class="sb-tag">美人肩 Skill 运行中</span>
+  <span class="sb-tag" id="sbTag">经典美人肩 · 运行中</span>
   <span class="sb-sep"></span>
   <span id="sbBacktest">五年实测：加载中…</span>
   <span class="sb-sep"></span>
-  <span id="sbWindow">最佳潜伏窗口：首板后第 3 ~ 15 个交易日</span>
+  <span id="sbWindow">最佳潜伏窗口：--</span>
   <span class="sb-sep"></span>
   <span id="sbDate">数据日期：--</span>
 </div>
@@ -43,22 +43,38 @@
   <section class="model-card">
     <div class="mc-icon">情形</div>
     <div class="mc-body">
-      <b>模型核心价值：涨停启动 → 缩量横盘蓄势 → 二次涨停爆发</b>
-      <p id="mcText">
-        一只股票涨停后横盘数日、量能不放不缩、股价钉在首板价附近 —— 这是资金洗盘的典型特征。
-        本系统扫描该形态，在<b>二次涨停爆发前</b>给出候选与潜伏区间。
-      </p>
+      <b id="mcTitle">模型核心价值：涨停启动 → 缩量横盘蓄势 → 二次涨停爆发</b>
+      <p id="mcText">加载中…</p>
     </div>
     <div class="mc-metrics" id="mcMetrics"></div>
   </section>
+
+  <!-- ───────────────── 模式选择 ───────────────── -->
+  <div class="modes" id="modes">
+    <button class="mode active" data-mode="classic">
+      <b>经典美人肩</b>
+      <em>涨停/准涨停 → 横盘 4~8 天 → 二次涨停</em>
+      <span class="mtag">最严格</span>
+    </button>
+    <button class="mode" data-mode="broad">
+      <b>广义美人肩</b>
+      <em>大涨未封板 → 横盘 3~8 天 → 涨停</em>
+      <span class="mtag warn">信号最多</span>
+    </button>
+    <button class="mode" data-mode="lowpos">
+      <b>低位票</b>
+      <em>暴跌 → 均线粘合 → 拐头 / 放量突破</em>
+      <span class="mtag ok">回撤最浅</span>
+    </button>
+  </div>
 
   <!-- ───────────────── 引擎区 ───────────────── -->
   <section class="engine">
     <div class="engine-head">
       <div class="eh-title">
         <span class="eh-dot"></span>
-        <h2>沪深A股 · 美人肩涨停蓄势二次突破量化扫描引擎</h2>
-        <p>扫描条件：锚点涨幅 9.5%~10.5%（涨停/准涨停） · 横盘 3~15 天 · 收盘震幅 ±7% · 量能趋势 ≥0.8 · 沪深主板</p>
+        <h2 id="ehTitle">沪深A股 · 经典美人肩扫描引擎</h2>
+        <p id="ehCond">扫描条件：加载中…</p>
       </div>
       <div class="eh-actions">
         <span class="chip chip-info" id="chipCount">候选 --</span>
@@ -69,21 +85,46 @@
     <!-- 过滤器 -->
     <div class="filters">
       <input id="fSearch" class="f-input" type="text" placeholder="搜索代码 / 名称 / 行业…" />
-      <label class="f-item">
-        <span>蓄势天数区间</span>
-        <input id="fGap" class="f-range" type="range" min="3" max="15" value="15" step="1" />
-        <b id="fGapVal">3 ~ 15 天</b>
-      </label>
-      <label class="f-item">
-        <span>日均振幅约束</span>
-        <input id="fAmp" class="f-range" type="range" min="0" max="8" value="0" step="0.5" />
-        <b id="fAmpVal">不限</b>
-      </label>
-      <label class="f-item">
-        <span>量能趋势下限</span>
-        <input id="fVol" class="f-range" type="range" min="0" max="1.6" value="0.8" step="0.05" />
-        <b id="fVolVal">0.80</b>
-      </label>
+
+      <!-- 美人肩专用 -->
+      <div class="f-group" id="fgMrj">
+        <label class="f-item">
+          <span>蓄势天数区间</span>
+          <input id="fGap" class="f-range" type="range" min="3" max="15" value="8" step="1" />
+          <b id="fGapVal">4 ~ 8 天</b>
+        </label>
+        <label class="f-item">
+          <span>日均振幅约束</span>
+          <input id="fAmp" class="f-range" type="range" min="0" max="8" value="4" step="0.5" />
+          <b id="fAmpVal">≤ 4%</b>
+        </label>
+        <label class="f-item">
+          <span>量能趋势下限</span>
+          <input id="fVol" class="f-range" type="range" min="0" max="1.6" value="0.9" step="0.05" />
+          <b id="fVolVal">0.90</b>
+        </label>
+      </div>
+
+      <!-- 低位票专用 -->
+      <div class="f-group" id="fgLowpos" hidden>
+        <label class="f-item"><span>档位</span></label>
+        <div class="f-tabs inline" id="fSub">
+          <button class="active" data-s="both">全部</button>
+          <button data-s="early">拐头</button>
+          <button data-s="breakout">突破</button>
+        </div>
+        <label class="f-item">
+          <span>250日位置上限</span>
+          <input id="fPos" class="f-range" type="range" min="10" max="100" value="65" step="5" />
+          <b id="fPosVal">≤ 65%</b>
+        </label>
+        <label class="f-item">
+          <span>量能(5/20)下限</span>
+          <input id="fVolLp" class="f-range" type="range" min="0" max="2" value="0" step="0.1" />
+          <b id="fVolLpVal">不限</b>
+        </label>
+      </div>
+
       <div class="f-tabs" id="fMarket">
         <button class="active" data-m="main">沪深主板</button>
         <button data-m="all">全部</button>
@@ -98,7 +139,7 @@
       <!-- 左：候选列表 -->
       <aside class="col-list">
         <div class="col-head">
-          <span>符合形态候选标的</span>
+          <span id="listTitle">符合形态候选标的</span>
           <em id="listHint">按综合打分排序</em>
         </div>
         <div class="cards" id="cards">

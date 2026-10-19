@@ -415,8 +415,11 @@ class Screener:
         snap = {it["code"]: it for it in items}
 
         # ---- SQL 层预筛（毫秒级）----
+        # 阈值跟着锚点口径走：经典/准涨停用 ~9%，广义美人肩（锚点 4~9.4%）必须放宽，
+        # 否则「大涨未封板」的票会在预筛阶段就被丢掉。精确判定仍在 Python 侧。
+        pre_threshold = max(2.0, min(9.5, float(cfg.anchor_min_gain) - 0.5))
         cand = self.store.recent_limit_up_codes(
-            adjust, lookback=cfg.max_gap + 3, threshold=9.5
+            adjust, lookback=cfg.max_gap + 3, threshold=pre_threshold
         )
         codes = [c for c in cand if c in names]
         if market != "all":

@@ -1,52 +1,130 @@
 /* ══════════════════════════════════════════════════════════════
-   美人肩 · 前端逻辑（ECharts K线 + MACD + 成交量）
+   形态量化选股 · 前端逻辑
+   三种模式：经典美人肩 / 广义美人肩 / 低位票
+   （ECharts K线 + MACD + 成交量）
    ══════════════════════════════════════════════════════════════ */
 'use strict';
 
 const UP = '#ff4d3d', DN = '#00c076', TXT2 = '#9aa5b8', TXT3 = '#66718a',
       LINE = '#232b3a', ACC = '#ff8a3d';
 
-const state = { items: [], filtered: [], current: null, chart: null, loading: false };
+const state = {
+  mode: 'classic',
+  modes: {},            // /api/mrj/stats 返回的三模式元信息
+  items: [],
+  filtered: [],
+  current: null,
+  chart: null,
+  loading: false,
+};
 
 const $ = (id) => document.getElementById(id);
 const f2 = (v, d = 2) => (v === null || v === undefined || isNaN(v)) ? '--' : Number(v).toFixed(d);
 const cls = (v) => v > 0 ? 'up' : (v < 0 ? 'dn' : 'flat');
 const sgn = (v) => (v > 0 ? '+' : '') + f2(v);
+const meta = () => state.modes[state.mode] || {};
+const preset = () => meta().params || {};
 
 function toast(msg, ms = 2200) {
   const t = $('toast'); t.textContent = msg; t.hidden = false;
   clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, ms);
 }
 
-/* ─────────────── 头部统计 ─────────────── */
+/* ─────────────── 模式元信息（统计条 / 模型卡 / 引擎标题） ─────────────── */
 async function loadStats() {
   try {
     const r = await fetch('/api/mrj/stats').then(r => r.json());
-    const b = r.backtest || {};
-    $('sbBacktest').innerHTML =
-      `五年实测：选中 <b>${(b.selected||0).toLocaleString()}</b> 次 / ` +
-      `二板成功 <b>${(b.hits||0).toLocaleString()}</b> 次 / ` +
-      `最终兑现率 <b>${b.hit_rate}%</b>`;
-    $('sbWindow').innerHTML = `最佳潜伏窗口：首板后第 <b>3 ~ 15</b> 个交易日`;
-    $('mcMetrics').innerHTML = `
-      <div class="m"><i>${b.hit_rate}%</i><span>最终兑现率</span></div>
-      <div class="m"><i>${b.signal_precision}%</i><span>信号精度</span></div>
-      <div class="m"><i>${b.recall}%</i><span>召回率</span></div>
-      <div class="m"><i>${b.per_day}</i><span>日均候选</span></div>`;
-    $('mcText').innerHTML =
-      `一只股票涨停后横盘数日、量能不放不缩、股价钉在首板价附近 —— 这是资金洗盘的典型特征。<br>` +
-      `本系统扫描该形态，在<b>二次涨停爆发前</b>给出候选与潜伏区间。` +
-      `五年（${b.window}）回测：选中标的最终 <b>${b.hit_rate}%</b> 兑现二次涨停、` +
-      `<b>${b.break_up}%</b> 冲高突破 +7%、<b>${b.break_down}%</b> 跌破下沿。`;
+    state.modes = r.modes || {};
+    if (r.default) state.mode = r.default;
   } catch (e) { console.warn(e); }
+}
+
+function applyMode(mode) {
+  state.mode = mode;
+  state.current = null;
+  state.items = [];
+  state.filtered = [];
+
+  document.querySelectorAll('#modes .mode')
+    .forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+
+  const m = meta(), p = m.params || {};
+  const isLp = mode === 'lowpos';
+
+  // 过滤器切换
+  $('fgMrj').hidden = isLp;
+  $('fgLowpos').hidden = !isLp;
+
+  // 统计条
+  $('sbTag').textContent = `${m.label || mode} · 运行中`;
+  $('sbBacktest').innerHTML = m.backtest_text || '五年实测：--';
+  $('sbWindow').innerHTML = (m.window || '').replace(/^最佳潜伏窗口：?/, '最佳潜伏窗口：') || '--';
+
+  // 模型卡
+  $('mcTitle').textContent = isLp
+    ? '模型核心价值：暴跌见底 → 低位均线粘合 → 拐头 / 放量突破'
+    : (mode === 'broad'
+      ? '模型核心价值：大涨蓄势 → 横盘不回落 → 等一根涨停'
+      : '模型核心价值：涨停启动 → 缩量横盘蓄势 → 二次涨停爆发');
+  $('mcText').innerHTML = m.desc || '';
+  $('mcMetrics').innerHTML = (m.metrics || [])
+    .map(([v, l]) => `<div class="m"><i>${v}</i><span>${l}</span></div>`).join('');
+
+  // 引擎标题
+  $('ehTitle').textContent = m.engine || '';
+  $('ehCond').textContent = m.condition || '';
+  $('listTitle').textContent = isLp ? '低位粘合候选标的' : '符合形态候选标的';
+
+  // 过滤器回落到该模式预设
+  if (isLp) {
+    $('fPos').value = p.max_position ?? 65;
+    $('fVolLp').value = 0;
+    syncLowposLabels();
+  } else {
+    const lo = p.min_gap ?? 3;
+    $('fGap').min = lo;
+    $('fGap').value = Math.max(lo, p.max_gap ?? 8);
+    $('fAmp').value = p.max_amp ?? 4;
+    $('fVol').value = p.min_vol ?? 0.9;
+    syncMrjLabels();
+  }
+
+  $('detail').innerHTML = `<div class="empty big">← 从左侧选择一只标的查看详情</div>`;
+  $('chipCount').textContent = '候选 --';
+  $('chipTime').textContent = '--';
+  $('cards').innerHTML = `<div class="empty">正在扫描…</div>`;
+}
+
+function syncMrjLabels() {
+  const lo = +(preset().min_gap ?? 3);
+  $('fGapVal').textContent = `${lo} ~ ${$('fGap').value} 天`;
+  const a = +$('fAmp').value;
+  $('fAmpVal').textContent = a === 0 ? '不限' : `≤ ${a}%`;
+  $('fVolVal').textContent = (+$('fVol').value).toFixed(2);
+}
+
+function syncLowposLabels() {
+  $('fPosVal').textContent = `≤ ${$('fPos').value}%`;
+  const v = +$('fVolLp').value;
+  $('fVolLpVal').textContent = v === 0 ? '不限' : `≥ ${v.toFixed(1)}`;
 }
 
 /* ─────────────── 扫描 ─────────────── */
 function scanParams() {
   const market = document.querySelector('#fMarket button.active')?.dataset.m || 'main';
+  if (state.mode === 'lowpos') {
+    return {
+      mode: 'lowpos',
+      market,
+      sub: document.querySelector('#fSub button.active')?.dataset.s || 'both',
+      max_pos: +$('fPos').value,
+      min_vol: +$('fVolLp').value || null,
+      limit: 60,
+    };
+  }
   return {
+    mode: state.mode,
     market,
-    min_gap: 3,
     max_gap: +$('fGap').value,
     max_amp: +$('fAmp').value,
     min_vol: +$('fVol').value,
@@ -57,11 +135,17 @@ function scanParams() {
 async function runScan(refresh = false, forceBars = false) {
   if (state.loading) return;
   state.loading = true;
+  const label = meta().label || '形态';
   $('cards').innerHTML = `<div class="empty"><span class="spin">◌</span> ` +
-    (forceBars ? '正在从上游重新拉取日线…（约 1~2 分钟）' : '正在扫描沪深A股…') + `</div>`;
+    (forceBars ? '正在从上游重新拉取日线…（约 1~2 分钟）'
+               : `正在扫描沪深A股 · ${label}…`) + `</div>`;
   $('chipTime').textContent = '扫描中…';
+
   const p = scanParams();
-  const qs = new URLSearchParams({ ...p, refresh: refresh ? 1 : 0, force_bars: forceBars ? 1 : 0 });
+  const clean = {};
+  Object.keys(p).forEach(k => { if (p[k] !== null && p[k] !== undefined && p[k] !== '') clean[k] = p[k]; });
+  const qs = new URLSearchParams({ ...clean, refresh: refresh ? 1 : 0, force_bars: forceBars ? 1 : 0 });
+
   try {
     const r = await fetch('/api/mrj/scan?' + qs).then(r => r.json());
     if (!r.ok) throw new Error(r.detail || '扫描失败');
@@ -70,7 +154,8 @@ async function runScan(refresh = false, forceBars = false) {
     $('chipCount').textContent = `候选 ${r.total} 只`;
     $('chipTime').textContent = `${r.cached ? '缓存' : '耗时 ' + r.elapsed + 's'}`;
     applyFilter();
-    if (state.filtered.length && !state.current) selectStock(state.filtered[0].code);
+    if (state.filtered.length) selectStock(state.filtered[0].code);
+    else if (r.hint) $('cards').innerHTML = `<div class="empty">${r.hint}</div>`;
   } catch (e) {
     $('cards').innerHTML = `<div class="empty">扫描失败：${e.message}</div>`;
     $('chipTime').textContent = '失败';
@@ -84,27 +169,46 @@ function applyFilter() {
     if (!kw) return true;
     return (it.code + it.name + (it.industry || '')).toLowerCase().includes(kw);
   });
-  $('listHint').textContent = `共 ${state.filtered.length} 只 · 按综合打分排序`;
+  $('listHint').textContent = `共 ${state.filtered.length} 只 · 按匹配得分排序`;
   renderCards();
+}
+
+function fallbackMetrics(it) {
+  if (state.mode === 'lowpos') {
+    return [
+      { value: f2(it.close_pos, 0) + '%', label: '250日位置' },
+      { value: f2(it.avg_amp) + '%', label: '均线离散度' },
+      { value: it.gap ?? '--', label: '粘合天数' },
+      { value: f2(it.score, 1), label: '匹配得分' },
+    ];
+  }
+  return [
+    { value: it.gap ?? '--', label: '蓄势天数' },
+    { value: f2(it.avg_amp) + '%', label: '日均振幅' },
+    { value: f2(it.vol_trend), label: '量能趋势' },
+    { value: f2(it.score, 1), label: '匹配得分' },
+  ];
 }
 
 function renderCards() {
   const box = $('cards');
-  if (!state.filtered.length) { box.innerHTML = `<div class="empty">没有符合条件的标的，试试放宽过滤条件</div>`; return; }
+  if (!state.filtered.length) {
+    box.innerHTML = `<div class="empty">没有符合条件的标的，试试放宽过滤条件</div>`;
+    return;
+  }
   box.innerHTML = state.filtered.map(it => {
     const c = cls(it.change_pct || 0);
-    const isLU = it.status === '二板已成';
-    const note = isLU
-      ? `【二板已成】今日已封涨停，形态兑现`
-      : `【临界爆发】横盘第 ${it.gap} 天，量能趋势 ${f2(it.vol_trend)}${it.vol_trend >= 1 ? '（放量）' : ''}`;
+    const strong = it.status === '二板已成' || it.status === '放量突破';
+    const metrics = (it.metrics && it.metrics.length ? it.metrics : fallbackMetrics(it))
+      .map(m => `<div class="s"><i>${m.value}</i><span>${m.label}</span></div>`).join('');
     return `
-    <div class="card${isLU ? ' lu' : ''}${state.current === it.code ? ' active' : ''}" data-code="${it.code}">
+    <div class="card${strong ? ' lu' : ''}${state.current === it.code ? ' active' : ''}" data-code="${it.code}">
       <div class="c-top">
         <div>
           <div>
             <span class="c-code">${it.code}</span>
             <span class="c-name">${it.name || ''}</span>
-            <span class="c-badge${isLU ? '' : ' warn'}">${it.status}</span>
+            <span class="c-badge${strong ? '' : ' warn'}">${it.status || ''}</span>
           </div>
           <div class="c-ind">${it.industry || '—'}</div>
         </div>
@@ -113,13 +217,8 @@ function renderCards() {
           <span class="pc ${c}">${sgn(it.change_pct)}%</span>
         </div>
       </div>
-      <div class="c-stats">
-        <div class="s"><i>${it.gap}</i><span>蓄势天数</span></div>
-        <div class="s"><i>${f2(it.avg_amp)}%</i><span>日均振幅</span></div>
-        <div class="s"><i>${f2(it.vol_trend)}</i><span>量能趋势</span></div>
-        <div class="s"><i>${f2(it.score, 1)}</i><span>匹配得分</span></div>
-      </div>
-      <div class="c-note">${note} · 二次涨停概率 <b>${f2(it.prob, 1)}%</b></div>
+      <div class="c-stats">${metrics}</div>
+      <div class="c-note">${it.note || ''}</div>
     </div>`;
   }).join('');
   box.querySelectorAll('.card').forEach(el =>
@@ -132,8 +231,16 @@ async function selectStock(code) {
   renderCards();
   const panel = $('detail');
   panel.innerHTML = `<div class="empty big"><span class="spin">◌</span> 加载 ${code} 详情…</div>`;
+
+  const p = { code, mode: state.mode, bars: 90 };
+  if (state.mode === 'lowpos') {
+    p.sub = document.querySelector('#fSub button.active')?.dataset.s || 'both';
+    p.max_pos = +$('fPos').value;
+  } else {
+    p.close_band = preset().close_band ?? 0.035;
+  }
   try {
-    const r = await fetch(`/api/mrj/detail?code=${code}&close_band=0.07`).then(r => r.json());
+    const r = await fetch('/api/mrj/detail?' + new URLSearchParams(p)).then(r => r.json());
     if (!r.ok) throw new Error(r.detail || '加载失败');
     renderDetail(r);
   } catch (e) {
@@ -141,60 +248,49 @@ async function selectStock(code) {
   }
 }
 
+const PLAN_TITLE = { classic: '经典美人肩实战潜伏作战手册', broad: '广义美人肩实战潜伏作战手册', lowpos: '低位票实战操作手册' };
+const CHECK_TITLE = { classic: '量化特征契合度全息体检', broad: '量化特征契合度全息体检', lowpos: '低位粘合特征全息体检' };
+
 function renderDetail(d) {
-  const it = state.items.find(x => x.code === d.code) || {};
-  const dt = d.detail || {}, plan = d.plan || {};
-  const c = cls(dt.change_pct || 0);
-  const gap = dt.gap ?? it.gap ?? '--';
+  const head = d.head || {}, plan = d.plan || {};
+  const stats = d.stats || [];
+  const dstr = stats[0]?.value || '';
+  const mode = d.mode || state.mode;
 
   $('detail').innerHTML = `
     <div class="d-head">
       <div class="d-title">
         <span class="code">${d.code}</span>
-        <span class="nm">${d.name || it.name || ''}</span>
-        <span class="sub">处于首板涨停后第 <b>${gap}</b> 天横盘蓄势</span>
+        <span class="nm">${d.name || ''}</span>
+        <span class="sub">${head.sub || ''}</span>
       </div>
       <div class="d-ma">
-        <span>MA5 <b>${f2(it.ma5)}</b></span>
-        <span>MA10 <b>${f2(it.ma10)}</b></span>
-        <span>MA20 <b>${f2(it.ma20)}</b></span>
-        <span>匹配得分 <b>${f2(it.score, 1)}</b></span>
-        <span>二次涨停概率 <b>${f2(it.prob, 1)}%</b></span>
+        ${(head.chips || []).map(c => `<span>${c.label} <b>${c.value}</b></span>`).join('')}
       </div>
     </div>
 
     <div class="stat-row">
-      <div class="s"><span>日期</span><i>${dt.date || '--'}</i></div>
-      <div class="s"><span>收盘</span><i class="${c}">${f2(dt.close)}</i></div>
-      <div class="s"><span>涨跌</span><i class="${c}">${sgn(dt.change_pct)}%</i></div>
-      <div class="s"><span>日均振幅</span><i>${f2(dt.amplitude)}%</i></div>
-      <div class="s"><span>成交量</span><i>${dt.volume ? (dt.volume / 1e4).toFixed(1) + '万' : '--'}</i></div>
-      <div class="s"><span>DIF</span><i>${f2(dt.dif, 3)}</i></div>
-      <div class="s"><span>DEA</span><i>${f2(dt.dea, 3)}</i></div>
-      <div class="s"><span>首板价</span><i>${f2(plan.anchor_price)}</i></div>
+      ${stats.map(s => `<div class="s"><span>${s.label}</span><i class="${s.tone || ''}">${s.value}</i></div>`).join('')}
     </div>
 
     <div class="chart" id="chart"></div>
 
     <div class="d-note">
-      <b>形态节点诊断（${dt.date || ''}）：</b>
-      首板日 ${plan.anchor_date || '--'} 涨停启动 → 横盘 <b>${gap}</b> 天蓄势，
-      量能趋势 <b>${f2(it.vol_trend)}</b>，收盘距首板价 <b>${sgn(it.dev_close_last)}%</b>，
-      整理期总振幅 <b>${f2(it.range_pct, 1)}%</b>。
+      <b>形态节点诊断（${dstr}）：</b>
+      ${d.note || ''}
     </div>
 
     <div class="d-sec">
-      <h3>美人肩实战潜伏作战手册</h3>
+      <h3>${PLAN_TITLE[mode] || '实战作战手册'}</h3>
       <div class="plan-grid">
-        <div class="p buy"><span>建仓潜伏区间</span><i>${f2(plan.buy_range?.[0])} ~ ${f2(plan.buy_range?.[1])}</i><em>锚点价附近低吸</em></div>
-        <div class="p stop"><span>严格止损线</span><i>${f2(plan.stop)}</i><em>锚点价 × 0.93，破位离场</em></div>
-        <div class="p target"><span>二次涨停目标位</span><i>${f2(plan.target)}</i><em>现价 × 1.10</em></div>
-        <div class="p rr"><span>预期盈亏比</span><i>1 : ${f2(plan.rr, 1)}</i><em>目标空间 / 止损空间</em></div>
+        ${(plan.items || []).map(it => `
+          <div class="p ${it.kind}"><span>${it.label}</span><i>${it.value}</i><em>${it.hint || ''}</em></div>
+        `).join('')}
       </div>
     </div>
 
     <div class="d-sec">
-      <h3>量化特征契合度全息体检</h3>
+      <h3>${CHECK_TITLE[mode] || '量化特征体检'}</h3>
       <div class="checks">
         ${(d.checks || []).map(k => `
           <div class="k ${k.ok ? 'ok' : 'no'}">
@@ -219,7 +315,7 @@ function drawChart(d) {
   const K = d.kline || [];
   const dates = K.map(x => String(x.date).slice(5));
   const ohlc = K.map(x => [x.open, x.close, x.low, x.high]);
-  const vols = K.map((x, i) => ({
+  const vols = K.map((x) => ({
     value: x.volume,
     itemStyle: { color: (x.close >= x.open) ? 'rgba(255,77,61,.55)' : 'rgba(0,192,118,.55)' },
   }));
@@ -230,8 +326,22 @@ function drawChart(d) {
     itemStyle: { color: (v >= 0 ? 'rgba(255,77,61,.75)' : 'rgba(0,192,118,.75)') },
   }));
 
-  const ai = d.anchor_index ?? 0;
-  const cs = d.consolidation || [ai + 1, K.length - 1];
+  const mk = d.marks || {};
+  const pt = mk.point || null;
+  const ar = mk.area || null;
+  const pointData = (pt && pt.index >= 0 && pt.index < K.length)
+    ? [{
+        name: pt.label, value: pt.label,
+        coord: [dates[pt.index], K[pt.index]?.high ?? 0],
+        itemStyle: { color: ACC },
+      }]
+    : [];
+  const areaData = (ar && K.length)
+    ? [[
+        { xAxis: dates[Math.max(0, Math.min(dates.length - 1, ar.start))] },
+        { xAxis: dates[Math.max(0, Math.min(dates.length - 1, ar.end))] },
+      ]]
+    : [];
 
   chart.setOption({
     animation: false,
@@ -242,8 +352,9 @@ function drawChart(d) {
       backgroundColor: 'rgba(20,25,36,.96)', borderColor: LINE, textStyle: { color: '#e7ecf5', fontSize: 11.5 },
       formatter: (ps) => {
         const i = ps[0].dataIndex, k = K[i];
+        if (!k) return '';
         return `<b>${k.date}</b><br/>开 ${f2(k.open)} 收 ${f2(k.close)}<br/>低 ${f2(k.low)} 高 ${f2(k.high)}<br/>` +
-               `量 ${(k.volume / 1e4).toFixed(1)}万手`;
+               `量 ${((k.volume || 0) / 1e4).toFixed(1)}万手`;
       },
     },
     grid: [
@@ -267,13 +378,13 @@ function drawChart(d) {
         itemStyle: { color: UP, color0: DN, borderColor: UP, borderColor0: DN },
         markPoint: {
           symbolSize: 42, label: { fontSize: 10, color: '#1a0f05', fontWeight: 700 },
-          data: [{ name: '首板', coord: [ai, K[ai]?.high ?? 0], value: '首板', itemStyle: { color: ACC } }],
+          data: pointData,
         },
         markArea: {
           silent: true,
           itemStyle: { color: 'rgba(255,138,61,.07)', borderColor: 'rgba(255,138,61,.35)', borderWidth: 1, borderType: 'dashed' },
-          label: { show: true, position: 'insideTop', color: ACC, fontSize: 10.5, formatter: '横盘蓄势区' },
-          data: [[{ xAxis: dates[Math.max(0, cs[0])] }, { xAxis: dates[Math.min(dates.length - 1, cs[1])] }]],
+          label: { show: true, position: 'insideTop', color: ACC, fontSize: 10.5, formatter: (ar && ar.label) || '' },
+          data: areaData,
         },
       },
       { name: 'MA5', type: 'line', data: d.ma5 || [], xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { width: 1.1, color: '#ffd166' } },
@@ -290,26 +401,48 @@ function drawChart(d) {
 
 /* ─────────────── 事件绑定 ─────────────── */
 (function init() {
-  loadStats();
-  runScan(false);
+  (async () => {
+    await loadStats();
+    const qm = new URLSearchParams(location.search).get('mode');
+    if (qm && state.modes[qm]) state.mode = qm;
+    applyMode(state.mode);
+    runScan(false);
+  })();
+
+  // 模式切换
+  document.querySelectorAll('#modes .mode').forEach(b =>
+    b.addEventListener('click', () => {
+      if (state.loading || b.dataset.mode === state.mode) return;
+      applyMode(b.dataset.mode);
+      try { history.replaceState(null, '', '?mode=' + b.dataset.mode); } catch (e) { /* ignore */ }
+      runScan(false);
+    }));
 
   $('btnScan').addEventListener('click', () => { state.current = null; runScan(true); });
   $('btnRebuild').addEventListener('click', () => {
-    if (!confirm('将从上游重新拉取候选股日线（约 1~2 分钟），确定继续？\n\n（全市场刷新请运行 research/28_refresh_qfq.py）')) return;
+    if (!confirm('将从上游重新拉取候选股日线（约 1~2 分钟），确定继续？\n\n（全市场刷新请运行 python -m stock_agent.screener warmup）')) return;
     state.current = null; runScan(false, true);
   });
 
   let t = null;
   const lazy = () => { clearTimeout(t); t = setTimeout(() => runScan(false), 420); };
 
-  $('fGap').addEventListener('input', (e) => { $('fGapVal').textContent = `3 ~ ${e.target.value} 天`; });
-  $('fGap').addEventListener('change', lazy);
-  $('fAmp').addEventListener('input', (e) => {
-    $('fAmpVal').textContent = +e.target.value === 0 ? '不限' : `≤ ${e.target.value}%`;
+  // 美人肩过滤器
+  ['fGap', 'fAmp', 'fVol'].forEach(id => {
+    $(id).addEventListener('input', syncMrjLabels);
+    $(id).addEventListener('change', lazy);
   });
-  $('fAmp').addEventListener('change', lazy);
-  $('fVol').addEventListener('input', (e) => { $('fVolVal').textContent = (+e.target.value).toFixed(2); });
-  $('fVol').addEventListener('change', lazy);
+
+  // 低位票过滤器
+  ['fPos', 'fVolLp'].forEach(id => {
+    $(id).addEventListener('input', syncLowposLabels);
+    $(id).addEventListener('change', lazy);
+  });
+  $('fSub').querySelectorAll('button').forEach(b =>
+    b.addEventListener('click', () => {
+      $('fSub').querySelectorAll('button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active'); state.current = null; runScan(false);
+    }));
 
   $('fSearch').addEventListener('input', applyFilter);
   $('fMarket').querySelectorAll('button').forEach(b =>
