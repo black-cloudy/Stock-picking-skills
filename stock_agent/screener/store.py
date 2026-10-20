@@ -357,6 +357,74 @@ class ScreenerStore:
                     out[row["code"]] = (row["fetched_at"], row["bars"])
         return out
 
+    def codes_before(
+        self,
+        adjust: str,
+        target_date: str,
+        codes: Optional[Sequence[str]] = None,
+    ) -> List[str]:
+        """返回「最后一根 K 线早于 ``target_date``」的代码（即还没更新到最新交易日）。
+
+        与 :meth:`stale_codes` 的区别：这里的判定依据是**数据本身到了哪一天**，
+        而不是「上次什么时候抓的」。后者会让已经入库的股票永远不再更新。
+        """
+        if not target_date:
+            return []
+        out: List[str] = []
+        chunk = list(codes) if codes is not None else None
+        with self._connect() as conn:
+            if chunk is None:
+                for row in conn.execute(
+                    "SELECT code FROM daily_bars WHERE adjust=? GROUP BY code "
+                    "HAVING MAX(date) < ? ORDER BY code",
+                    (adjust, target_date),
+                ):
+                    out.append(row[0])
+                return out
+            for i in range(0, len(chunk), 500):
+                batch = chunk[i : i + 500]
+                marks = ",".join("?" * len(batch))
+                for row in conn.execute(
+                    f"SELECT code FROM daily_bars WHERE adjust=? AND code IN ({marks}) "
+                    f"GROUP BY code HAVING MAX(date) < ?",
+                    [adjust, *batch, target_date],
+                ):
+                    out.append(row[0])
+        return out
+
+    def max_date(self, adjust: str = "qfq") -> str:
+        """本地库里最新的交易日（YYYY-MM-DD）；空库返回 ''。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT MAX(date) FROM daily_bars WHERE adjust=?", (adjust,)
+            ).fetchone()
+        return str(row[0]) if row and row[0] else ""
+
+    def date_coverage(self, adjust: str = "qfq") -> Dict[str, Any]:
+        """本地日线的“覆盖面”：大多数股票更新到了哪一天。
+
+        不能用 ``MAX(date)``：只要一只股票有今天的 K 线，它就是今天，
+        会造成“数据已是最新”的假象。这里取 **每股最新日期的众数**。
+        """
+        with self._connect() as conn:
+            total = conn.execute(
+                "SELECT COUNT(DISTINCT code) FROM daily_bars WHERE adjust=?", (adjust,)
+            ).fetchone()[0]
+            rows = conn.execute(
+                "SELECT d, COUNT(*) c FROM ("
+                "  SELECT code, MAX(date) AS d FROM daily_bars WHERE adjust=? GROUP BY code"
+                ") GROUP BY d ORDER BY c DESC, d DESC LIMIT 4",
+                (adjust,),
+            ).fetchall()
+        if not rows:
+            return {"date": "", "covered": 0, "total": int(total or 0), "top": []}
+        return {
+            "date": str(rows[0][0]),
+            "covered": int(rows[0][1]),
+            "total": int(total or 0),
+            "top": [[str(r[0]), int(r[1])] for r in rows],
+        }
+
     def stale_codes(
         self,
         codes: Sequence[str],
@@ -375,8 +443,10 @@ class ScreenerStore:
                 stale.append(code)
                 continue
             fetched_at, bars = info
-            if bars == 0 and (now - fetched_at) <= ttl:
-                continue  # 刚试过且无数据，暂时跳过
+            # 失败过的只做「短负缓存」（10 分钟）：否则一次限流会把整只股票锁死 12 小时，
+            # 表现为「明明上游已有今天的数据，本地却永远不更新」。
+            if bars == 0 and (now - fetched_at) <= min(ttl, 600.0):
+                continue
             if bars < min_bars or (now - fetched_at) > ttl:
                 stale.append(code)
         return stale

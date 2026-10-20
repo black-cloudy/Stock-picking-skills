@@ -137,8 +137,9 @@ async function runScan(refresh = false, forceBars = false) {
   state.loading = true;
   const label = meta().label || '形态';
   $('cards').innerHTML = `<div class="empty"><span class="spin">◌</span> ` +
-    (forceBars ? '正在从上游重新拉取日线…（约 1~2 分钟）'
-               : `正在扫描沪深A股 · ${label}…`) + `</div>`;
+    (forceBars ? '正在从上游把日线更新到最新交易日…（当天首次约 1~2 分钟）'
+               : `正在更新今日行情并扫描 · ${label}…` +
+                 (state.mode === 'lowpos' ? '（当天首次约 1~2 分钟）' : '')) + `</div>`;
   $('chipTime').textContent = '扫描中…';
 
   const p = scanParams();
@@ -150,7 +151,12 @@ async function runScan(refresh = false, forceBars = false) {
     const r = await fetch('/api/mrj/scan?' + qs).then(r => r.json());
     if (!r.ok) throw new Error(r.detail || '扫描失败');
     state.items = r.items || [];
-    $('sbDate').textContent = `数据日期：${r.trade_date || '--'}`;
+    const stale = !!r.is_stale;
+    const cov = r.coverage || {};
+    const covTxt = cov.total ? `（${(cov.covered || 0).toLocaleString()}/${(cov.total || 0).toLocaleString()} 只已到该日，${cov.pct || 0}%）` : '';
+    $('sbDate').innerHTML = `数据日期：${r.trade_date || '--'}${covTxt}` +
+      (stale ? ` <b style="color:var(--up)">← 上游已到 ${r.upstream_date}，点「⟳ 刷新日线」补齐</b>` : '');
+    if (stale) toast(`⚠ 日线没跟上：本地多数停在 ${r.trade_date || '?'}（覆盖 ${cov.pct || 0}%），上游已到 ${r.upstream_date}。点「⟳ 刷新日线」补齐`, 7000);
     $('chipCount').textContent = `候选 ${r.total} 只`;
     $('chipTime').textContent = `${r.cached ? '缓存' : '耗时 ' + r.elapsed + 's'}`;
     applyFilter();
@@ -420,7 +426,7 @@ function drawChart(d) {
 
   $('btnScan').addEventListener('click', () => { state.current = null; runScan(true); });
   $('btnRebuild').addEventListener('click', () => {
-    if (!confirm('将从上游重新拉取候选股日线（约 1~2 分钟），确定继续？\n\n（全市场刷新请运行 python -m stock_agent.screener warmup）')) return;
+    if (!confirm('将把日线增量更新到最新交易日（只补落后的股票，当天首次约 1~2 分钟），确定继续？')) return;
     state.current = null; runScan(false, true);
   });
 

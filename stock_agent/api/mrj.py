@@ -447,15 +447,19 @@ async def mrj_scan(
 
         t0 = time.time()
         hint = ""
+        upstream = ""
+        cov: Dict[str, Any] = {"date": "", "covered": 0, "total": 0}
+        cov: Dict[str, Any] = {"date": "", "covered": 0, "total": 0}
         if mode == "lowpos":
             cfg = _lowpos_cfg(sub=sub, max_pos=max_pos, min_vol=min_vol)
             try:
-                async with Screener(service=svc, concurrency=16) as sc:
+                async with Screener(service=svc, concurrency=8) as sc:
                     rows = await sc.scan_low_position(
                         cfg, top=limit, market=market, adjust="qfq",
-                        exclude_suspended=True,
+                        exclude_suspended=True, refresh=bool(force_bars),
                     )
-                    trade_date = (sc.store.recent_dates("qfq", 1) or [""])[0]
+                    cov = sc.store.date_coverage("qfq")
+                    upstream = await sc.latest_trade_date()
             except Exception as exc:  # noqa: BLE001
                 raise HTTPException(status_code=502, detail=f"扫描失败: {exc}") from exc
             items = [_lowpos_item(r) for r in rows]
@@ -469,12 +473,13 @@ async def mrj_scan(
                 close_band=close_band, max_amp=max_amp, min_vol=min_vol,
             )
             try:
-                async with Screener(service=svc, concurrency=16) as sc:
+                async with Screener(service=svc, concurrency=8) as sc:
                     rows = await sc.scan_second_board(
                         cfg, top=limit, market=market, adjust="qfq",
                         exclude_suspended=True, refresh=bool(force_bars),
                     )
-                    trade_date = (sc.store.recent_dates("qfq", 1) or [""])[0]
+                    cov = sc.store.date_coverage("qfq")
+                    upstream = await sc.latest_trade_date()
             except Exception as exc:  # noqa: BLE001
                 raise HTTPException(status_code=502, detail=f"扫描失败: {exc}") from exc
             items = [_mrj_item(r, mode) for r in rows]
@@ -484,11 +489,23 @@ async def mrj_scan(
                         "五年年均只有约 30 次机会 —— 今天没命中是正常的。"
                         "想多看几只可以拉大蓄势天数上限，或切到「广义美人肩」。")
 
+        trade_date = cov.get("date") or ""
+        covered, total_db = int(cov.get("covered") or 0), int(cov.get("total") or 0)
+        covered_pct = (covered / total_db) if total_db else 0.0
+        is_stale = bool(
+            upstream and (not trade_date or trade_date < upstream or covered_pct < 0.9)
+        )
         data = {
             "ok": True,
             "mode": mode,
             "mode_label": MODES[mode]["label"],
             "trade_date": trade_date,
+            "upstream_date": upstream,
+            "is_stale": is_stale,
+            "coverage": {
+                "date": trade_date, "covered": covered, "total": total_db,
+                "pct": round(covered_pct * 100, 1),
+            },
             "elapsed": round(time.time() - t0, 1),
             "total": len(items),
             "hint": hint,

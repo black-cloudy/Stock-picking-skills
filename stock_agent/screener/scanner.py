@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import sys
 import time
 from dataclasses import dataclass, field
@@ -126,6 +127,7 @@ class Screener:
         self.progress_cb = progress
         self._universe_cache: Optional[List[Dict[str, Any]]] = None
         self._names: Dict[str, str] = {}
+        self._trade_date_cache: Optional[Tuple[float, str]] = None
 
     # ------------------------------------------------------------ 生命周期
 
@@ -201,6 +203,27 @@ class Screener:
         days = [b["date"] for b in data.get("bars", []) if b.get("date")]
         return days[-count:]
 
+    async def latest_trade_date(self, ttl: float = 120.0) -> str:
+        """上游最新交易日（YYYY-MM-DD）。
+
+        用来判断本地日线是不是“还停在昨天”。上游挂了就返回上次的结果 / ``""``，
+        不影响扫描本身。
+        """
+        now = time.monotonic()
+        hit = self._trade_date_cache
+        if hit and now - hit[0] < ttl and hit[1]:
+            return hit[1]
+        try:
+            days = await self.trading_days(1)
+            day = days[-1] if days else ""
+        except Exception as exc:  # noqa: BLE001
+            log.debug("取最新交易日失败: %s", exc)
+            day = ""
+        if day:
+            self._trade_date_cache = (now, day)
+            return day
+        return hit[1] if hit else ""
+
     async def universe(self, refresh: bool = False) -> List[Dict[str, Any]]:
         """全市场股票快照（SQLite 缓存 + 内存缓存，避免每次扫都打上游）。"""
         if self._universe_cache is not None and not refresh:
@@ -270,11 +293,14 @@ class Screener:
         stage: str = "拉取日线",
         tail: Optional[int] = None,
         force: bool = False,
+        target_date: Optional[str] = None,
     ) -> Dict[str, List[Dict[str, Any]]]:
-        """确保这些代码的日线在本地缓存中（缺失的并发补拉）。
+        """确保这些代码的日线在本地缓存中（缺失 / 落后的并发补拉）。
 
         ``tail`` 只回传每只股票最近 N 根（形态判定只需尾部数据，可大幅提速）。
         ``force=True`` 时忽略缓存直接重新拉取（用于把本地数据刷新到最新交易日）。
+        ``target_date`` 给定时（如 ``"2026-10-20"``），**最后一根 K 线早于该日期**
+        的股票也算“缺数据”——这是保证「今天能看到今天的数据」的关键。
         """
         codes = list(dict.fromkeys(codes))
         if not codes:
@@ -288,6 +314,16 @@ class Screener:
         else:
             have = {c: b for c, b in cached.items() if len(b) >= floor}
             stale = [c for c in codes if len(cached.get(c, [])) < floor]
+            if target_date:
+                # 数据没跟到最新交易日的，一并补拉（已入库但停在昨天的股票）
+                lag = [
+                    c for c in have
+                    if str((cached.get(c) or [{}])[-1].get("date") or "") < target_date
+                ]
+                if lag:
+                    stale = list(dict.fromkeys([*stale, *lag]))
+                    for c in lag:
+                        have.pop(c, None)
             stale = self.store.stale_codes(stale, adjust, min_bars)
         stale_set = set(stale)
 
@@ -302,23 +338,43 @@ class Screener:
         sem = asyncio.Semaphore(self.concurrency)
         want = max(min_bars + 10, 80)
 
+        # ---- 限流保护：连续大量失败就自动停止，不要把上游彻底惹火 ----
+        breaker = {"fails": 0, "stop": False, "done": 0}
+        fail_limit = max(20, int(len(stale_set) * 0.5))
+
         async def work(code: str) -> None:
+            if breaker["stop"]:
+                progress.tick(False)
+                return
             async with sem:
-                try:
-                    data = await self.svc.kline(code, "daily", adjust, want)
-                    bars = data.get("bars") or []
-                except Exception:  # noqa: BLE001
-                    bars = []
+                bars: List[Dict[str, Any]] = []
+                for attempt in range(2):
+                    try:
+                        data = await self.svc.kline(code, "daily", adjust, want)
+                        bars = data.get("bars") or []
+                        break
+                    except Exception:  # noqa: BLE001
+                        if attempt == 0 and not breaker["stop"]:
+                            await asyncio.sleep(0.4 + random.random() * 0.6)
                 if bars:
                     self.store.put_bars(code, adjust, bars)
                     if len(bars) >= min_bars:
                         have[code] = bars
+                    breaker["done"] += 1
                     progress.tick(True)
                 else:
                     self.store.mark_failed(code, adjust)
+                    breaker["fails"] += 1
+                    if breaker["fails"] >= fail_limit:
+                        breaker["stop"] = True
                     progress.tick(False)
 
         await asyncio.gather(*(work(c) for c in stale_set))
+        if breaker["stop"]:
+            log.warning(
+                "上游连续失败 %d 次，已中止本批拉取（疑似限流）；稍后重试即可续上",
+                breaker["fails"],
+            )
         for c in codes:
             if c in stale_set:
                 continue
@@ -429,7 +485,7 @@ class Screener:
 
         bars_map = await self.ensure_bars(
             codes, adjust, cfg.min_bars, "① 拉取候选股日线", tail=cfg.indicator_bars,
-            force=refresh,
+            force=refresh, target_date=await self.latest_trade_date(),
         )
 
         from .context import get_context
@@ -649,11 +705,15 @@ class Screener:
         market: str = "main",
         adjust: str = "qfq",
         exclude_suspended: bool = True,
+        refresh: bool = False,
     ) -> List[Dict[str, Any]]:
         """扫描「低位均线粘合 + 拐头向上」的票（用户 2026-09 的两个样本）。
 
         与趋势票不同，这里没有自动放宽：不符合就返回空。
         全市场读取 300 根尾部日线 → 廉价预筛（暴跌+低位）→ 只为幸存者算 MA/MACD。
+
+        ``refresh=True`` 或本地数据停在旧交易日时，会先把全市场日线补到最新
+        （只拉落后的那部分，不是重新拉全量）。
         """
         cfg = cfg or LowPosConfig()
         items = await self.universe()
@@ -663,6 +723,17 @@ class Screener:
         codes = [c for c in names if c]
         if market != "all":
             codes = [c for c in codes if self._match_market(c, market)]
+
+        # ---- 先把日线补到最新交易日（否则今天看不到今天的 K 线）----
+        target = await self.latest_trade_date()
+        lagging = list(codes) if refresh else (
+            self.store.codes_before(adjust, target, codes) if target else []
+        )
+        if lagging:
+            await self.ensure_bars(
+                lagging, adjust, 80, "⓪ 更新日线到最新交易日",
+                tail=None, force=refresh, target_date=target,
+            )
 
         # ---- 读取最近 300 根日线（走日期索引，一次拿完）----
         need = max(cfg.min_bars + 40, 300)
@@ -846,6 +917,46 @@ class Screener:
         bars_map = await self.ensure_bars(codes, "none", 70, "预热全市场日线")
         return {
             "requested": len(codes),
+            "success": len(bars_map),
+            "elapsed": round(time.monotonic() - began, 1),
+            "store": self.store.stats(),
+        }
+
+    async def refresh_all(
+        self,
+        adjust: str = "qfq",
+        market: str = "main",
+        force: bool = False,
+        limit: int = 0,
+    ) -> Dict[str, Any]:
+        """把全市场日线增量更新到最新交易日（只补落后的股票）。
+
+        日常只需要这一步：比全量 ``warmup`` 快得多，也不会动已有历史。
+        """
+        items = await self.universe(refresh=True)
+        codes = [it["code"] for it in items if it.get("code")]
+        if market != "all":
+            codes = [c for c in codes if self._match_market(c, market)]
+        if limit:
+            codes = codes[:limit]
+
+        target = await self.latest_trade_date(ttl=0)
+        lagging = list(codes) if force else (
+            self.store.codes_before(adjust, target, codes) if target else codes
+        )
+        began = time.monotonic()
+        bars_map = (
+            await self.ensure_bars(
+                lagging, adjust, 80, "更新日线到最新交易日",
+                tail=None, force=force, target_date=target,
+            )
+            if lagging
+            else {}
+        )
+        return {
+            "target_date": target,
+            "universe": len(codes),
+            "lagging": len(lagging),
             "success": len(bars_map),
             "elapsed": round(time.monotonic() - began, 1),
             "store": self.store.stats(),

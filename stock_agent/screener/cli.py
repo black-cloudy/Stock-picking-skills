@@ -593,6 +593,23 @@ async def run_warmup(args: argparse.Namespace) -> int:
     return 0
 
 
+async def run_refresh(args: argparse.Namespace) -> int:
+    async with Screener(
+        concurrency=args.concurrency,
+        progress=None if args.no_progress else ConsoleProgress(True),
+    ) as screener:
+        await _prepare_sources(screener, args.source)
+        info = await screener.refresh_all(
+            adjust=args.adjust, market=args.market, limit=args.limit, force=args.force,
+        )
+        print("\n  日线更新完成")
+        print(f"  上游最新交易日  {info['target_date'] or '--'}")
+        print(f"  全市场 {info['universe']} 只 / 落后 {info['lagging']} 只 / "
+              f"成功 {info['success']} 只 / 用时 {info['elapsed']}s")
+        print(f"  本地缓存: {info['store']}\n")
+    return 0
+
+
 def run_stats(args: argparse.Namespace) -> int:
     store = ScreenerStore(args.db or _default_db())
     info = store.stats()
@@ -764,6 +781,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--source", default="")
     p.add_argument("--no-progress", action="store_true")
     p.set_defaults(func=run_warmup, top=0, json=False, csv=False, output="", verbose=False)
+
+    p = sub.add_parser("refresh", aliases=["update", "更新", "增量"],
+                       help="把全市场日线增量更新到最新交易日（只补落后的）")
+    p.add_argument("--adjust", default="qfq", choices=["qfq", "hfq", "none"])
+    p.add_argument("--market", default="main", help="all / main / sh / sz …")
+    p.add_argument("--force", action="store_true", help="忽略落后判断，全部重拉")
+    p.add_argument("--limit", type=int, default=0, help="只更新前 N 只（0 = 全部）")
+    p.add_argument("--concurrency", type=int, default=6,
+                   help="并发数（默认 6；调大会很容易被数据源限流）")
+    p.add_argument("--source", default="")
+    p.add_argument("--no-progress", action="store_true")
+    p.set_defaults(func=run_refresh, top=0, json=False, csv=False, output="", verbose=False)
 
     p = sub.add_parser("stats", help="查看本地缓存状态")
     p.add_argument("--db", default="")

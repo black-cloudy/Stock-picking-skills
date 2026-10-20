@@ -31,6 +31,8 @@ QT_URL = "https://qt.gtimg.cn/q="
 # 腾讯各接口的备用域名（第一个为主，失败后自动轮换）
 # (base_url, path) —— proxy.finance.qq.com 的路径带 /ifzqgtimg 前缀
 KLINE_ENDPOINTS = (
+    # newfqkline：腾讯目前唯一没被 WAF 拦的日线入口（2026-10 实测）
+    ("https://proxy.finance.qq.com", "/ifzqgtimg/appstock/app/newfqkline/get"),
     ("https://web.ifzq.gtimg.cn", "/appstock/app/fqkline/get"),
     ("https://ifzq.gtimg.cn", "/appstock/app/fqkline/get"),
     ("https://proxy.finance.qq.com", "/ifzqgtimg/appstock/app/fqkline/get"),
